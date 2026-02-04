@@ -1,12 +1,31 @@
 #include "filetablemodel.h"
 #include <qtimer.h>
 
-QString pretty(uint64_t b) {
+QString prettySize(uint64_t b) {
     const char* suf[] = {"B","KB","MB","GB","TB"};
     double v = b;
     int i = 0;
     while (v >= 1024 && i < 4) { v /= 1024; i++; }
     return QString("%1 %2").arg(v, 0, 'f', 2).arg(suf[i]);
+}
+
+QString prettyNumber(qint64 value)
+{
+    const char* suffixes[] = {"", "K", "M", "B", "T"};
+
+    double num = static_cast<double>(value);
+    int suffixIndex = 0;
+
+    while (num >= 1000.0 && suffixIndex < 4) {
+        num /= 1000.0;
+        ++suffixIndex;
+    }
+
+    // show 1 decimal only if needed
+    if (num >= 10 || suffixIndex == 0)
+        return QString::number(static_cast<qint64>(num)) + suffixes[suffixIndex];
+    else
+        return QString::number(num, 'f', 1) + suffixes[suffixIndex];
 }
 
 
@@ -16,6 +35,7 @@ enum Columns {
     COLUMN_ICON,
     COLUMN_NAME,
     COLUMN_SIZE,
+    COLUMN_CHILDREN_OBJECTS_LEN,
     COLUMN_EDITDATE,
     COLUMN_TYPE,
     COLUMN_COUNT
@@ -51,13 +71,16 @@ QVariant FileTableModel::data(const QModelIndex& index, int role) const
         case COLUMN_NAME:
             return row.name;
         case COLUMN_SIZE:
-            return pretty(row.size); // or pretty()
+            return prettySize(row.size);
+        case COLUMN_CHILDREN_OBJECTS_LEN:
+            return row.isDir ? prettyNumber(row.children_onjects_len) : "1";
         case COLUMN_EDITDATE:
             return row.modified.toString("yyyy-MM-dd HH:mm");
         case COLUMN_TYPE:
             return row.isDir ? "Folder" : "File";
         case COLUMN_ICON:
             return row.icon;
+
         }
         break;
 
@@ -80,6 +103,8 @@ QVariant FileTableModel::data(const QModelIndex& index, int role) const
             return row.isDir;
         case COLUMN_ICON:
             return row.icon;
+        case COLUMN_CHILDREN_OBJECTS_LEN:
+            return row.children_onjects_len;
 
         }
         break;
@@ -95,7 +120,7 @@ QVariant FileTableModel::headerData(int section,
 {
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole) {
         static const QStringList headers = {
-            "№", "", "Name", "Size", "Modified", "Type"
+            "№", "", "Name", "Size", "Objects", "Modified", "Type"
         };
         return headers.value(section);
     }
@@ -166,10 +191,12 @@ bool FileTableModel::isDirAt(int row) const
 }
 
 
-void FileTableModel::changeRowSize(int row, quint64 size){
+void FileTableModel::changeRowSize(int row, quint64 size, quint64 files){
     m_rows[row].size = size;
-    QModelIndex index = createIndex(row, COLUMN_SIZE);
-    emit dataChanged(index,index);
+    m_rows[row].children_onjects_len = files;
+    QModelIndex index1 = createIndex(row, COLUMN_SIZE);
+    QModelIndex index2 = createIndex(row, COLUMN_CHILDREN_OBJECTS_LEN);
+    emit dataChanged(index1,index2);
 }
 
 void FileTableModel::changeLastRowSize(quint64 size){

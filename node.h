@@ -21,6 +21,7 @@
 struct Node {
     QString name;      // local name only
     uint64_t size = 0;
+    uint64_t children_objects_len = 0;
     bool isDir = false;
     bool scanned = false;
     std::time_t lastModified = 0;

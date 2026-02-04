@@ -4,14 +4,14 @@
 #include <QString>
 
 class DirectoryScanner : public QObject{
-    Q_OBJECT   // must be here!
+    Q_OBJECT
 
 public:
     explicit DirectoryScanner(QObject* parent = nullptr);
     ~DirectoryScanner() override = default;
 
 public:
-    uint64_t scan(std::shared_ptr<Node> node,
+    QPair<uint64_t,uint64_t> scan(std::shared_ptr<Node> node,
                   std::shared_ptr<Node> l1parent,
                   std::atomic<bool>& cancel,
                   uint64_t level);

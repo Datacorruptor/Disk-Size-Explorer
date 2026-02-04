@@ -10,6 +10,7 @@ struct FileRow
     QString name;
     QString path;
     quint64 size;
+    quint64 children_onjects_len;
     QDateTime modified;
     bool isDir;
     QIcon icon;
@@ -35,7 +36,7 @@ public:
     int insertRow(const FileRow& row);
     void prependRow(const FileRow& row);
     void appendRows(const QVector<FileRow>& rows);
-    void changeRowSize(int row, quint64 size);
+    void changeRowSize(int row, quint64 size, quint64 files);
     void changeLastRowSize(quint64 size);
     void setIcon(int row, const QIcon& icon);
 

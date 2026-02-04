@@ -77,7 +77,7 @@ uint64_t DirectoryScanner::countFiles(const QString& path, bool doPrint)
 // Scan directory sizes
 // --------------------
 
-uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
+QPair<uint64_t,uint64_t> DirectoryScanner::scan(std::shared_ptr<Node> node,
                                 std::shared_ptr<Node> l1parent,
                                 std::atomic<bool>& cancel,
                                 uint64_t level)
@@ -88,16 +88,71 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
                 << "scanned:" << node->scanned;
 
     if (node->scanned)
-        return node->size;
+        return {node->size, node->children_objects_len};
 
     uint64_t totalSize = 0;
+    uint64_t totalChildren = 0;
 
+    QDir dir(node->path());
+    dir.setFilter(
+        QDir::NoDotAndDotDot |
+        QDir::AllEntries |
+        QDir::Hidden |
+        QDir::System
+        );
+
+
+    for (const auto& info : dir.entryInfoList()){
+        auto child = std::make_shared<Node>();
+        child->name = info.fileName();
+        child->cachedPath = joinPath(node->path(), info.fileName());
+        child->parent = node;
+        child->isDir = info.isDir();
+        child->lastModified = info.lastModified().toSecsSinceEpoch();
+
+        if (level == 0)
+            emit nodeStarted(0, child);
+
+        if (child->isDir) {
+            if (level == 0)
+                qInfo() << "scanning " << child->path();
+
+            if (level == 1){
+                l1parent = node;
+            }
+            auto result = scan(child, l1parent, cancel, level+1);
+            totalSize += result.first;
+            totalChildren += result.second;
+
+
+            if (level == 0)
+                emit nodeFinished(0, child);
+        } else {
+            child->size = info.size();
+            totalSize += child->size;
+            totalChildren += 1;
+
+            if (l1parent) {
+                emit nodeUpdated(child->size, l1parent);
+            }
+
+            //one file processed
+            emit nodeFinished(child->size, nullptr);
+
+            if (level == 0)
+                emit nodeFinished(0, child);
+        }
+
+        node->children.push_back(std::move(child));
+    }
+
+    /*
     WIN32_FIND_DATAW data;
     std::wstring search = toW(node->path()) + L"\\*";
 
     HANDLE hFind = FindFirstFileW(search.c_str(), &data);
     if (hFind == INVALID_HANDLE_VALUE)
-        return 0;
+        return {0,0};
 
     do {
         if (cancel)
@@ -135,7 +190,9 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
             if (level == 1){
                 l1parent = node;
             }
-            totalSize += scan(child, l1parent, cancel, level+1);
+            auto result = scan(child, l1parent, cancel, level+1);
+            totalSize += result.first;
+            totalChildren += result.second;
 
 
             if (level == 0)
@@ -147,6 +204,7 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
 
             child->size = s.QuadPart;
             totalSize += child->size;
+            totalChildren += 1;
 
             if (l1parent) {
                 emit nodeUpdated(child->size, l1parent);
@@ -163,7 +221,7 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
 
     } while (FindNextFileW(hFind, &data));
 
-    FindClose(hFind);
+    FindClose(hFind);*/
 
     // Sort largest first
     std::sort(node->children.begin(), node->children.end(),
@@ -172,6 +230,7 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
               });
 
     node->size = totalSize;
+    node->children_objects_len = totalChildren;
     node->scanned = true;
 
 
@@ -181,5 +240,5 @@ uint64_t DirectoryScanner::scan(std::shared_ptr<Node> node,
                 << "scanned:" << node->scanned;
         emit scanEnded(node->size, node);
     }
-    return totalSize;
+    return {totalSize, totalChildren};
 }

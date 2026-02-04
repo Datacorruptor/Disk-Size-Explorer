@@ -20,31 +20,6 @@
 #include "scanner.h"
 
 
-QString pretty(uint64_t b);
-
-class SizeItem : public QTableWidgetItem
-{
-public:
-    explicit SizeItem(uint64_t bytes)
-        : QTableWidgetItem(pretty(bytes)), m_bytes(bytes) {}
-
-    bool operator<(const QTableWidgetItem &other) const override
-    {
-        auto otherItem = dynamic_cast<const SizeItem*>(&other);
-        if (!otherItem)
-            return QTableWidgetItem::operator<(other);
-
-        return m_bytes < otherItem->m_bytes;
-    }
-
-    uint64_t getBytes(){
-        return m_bytes;
-    }
-
-private:
-    uint64_t m_bytes;
-};
-
 
 class AutoStretchTable : public QTableWidget
 {
@@ -103,6 +78,7 @@ private slots:
     void updateProgress();
     void showContextMenu(const QPoint& pos);
     void navigate(const QModelIndex& index);
+    void sectionClick(const int index);
     void goBack();
 
 private:
@@ -113,19 +89,20 @@ private:
     void onNodeUpdated(uint64_t newSize, std::shared_ptr<Node> node);
     void onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node);
     void onScanFinished(uint64_t newSize, std::shared_ptr<Node> node);
-    void confirmMultiDelete(const QStringList& paths,const QStringList& names,const QVector<int>& rows);
+    void confirmMultiDelete(const QStringList& paths,const QStringList& names,const QStringList& sizes,const QVector<int>& rows);
     bool moveToRecycleBin(const QString& path);
     QString joinPathWin(const QString& base, const QString& name);
     void saveInBackground(QHash<QString, std::shared_ptr<Node>> scanResultHash);
     void closeEvent(QCloseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
-    bool showDeleteConfirmDialog(const QStringList& names);
+    bool showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes);
     bool loadBinary(QHash<QString, std::shared_ptr<Node>>& hash,const QString& fileName);
     void saveBeforeExit();
 
     // UI
     QComboBox* pathEdit;
     QPushButton* scanButton;
+    QPushButton* refreshButton;
     QPushButton* backBtn;
     QProgressBar* progressBar;
     //AutoStretchTable* table;
@@ -155,4 +132,5 @@ private:
     bool isSaving = false;
 
     QFileIconProvider iconProvider;
+
 };

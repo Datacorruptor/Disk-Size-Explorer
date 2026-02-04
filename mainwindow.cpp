@@ -52,15 +52,56 @@ enum Columns {
     COLUMN_ICON,
     COLUMN_NAME,
     COLUMN_SIZE,
+    COLUMN_CHILDREN_OBJECTS_LEN,
     COLUMN_EDITDATE,
     COLUMN_TYPE,
     COLUMNs_COUNT
 };
 
+QString prettySizeMain(uint64_t b) {
+    const char* suf[] = {"B","KB","MB","GB","TB"};
+    double v = b;
+    int i = 0;
+    while (v >= 1024 && i < 4) { v /= 1024; i++; }
+    return QString("%1 %2").arg(v, 0, 'f', 2).arg(suf[i]);
+}
+
+QString prettyNumberMain(qint64 value)
+{
+    const char* suffixes[] = {"", "K", "M", "B", "T"};
+
+    double num = static_cast<double>(value);
+    int suffixIndex = 0;
+
+    while (num >= 1000.0 && suffixIndex < 4) {
+        num /= 1000.0;
+        ++suffixIndex;
+    }
+
+    // show 1 decimal only if needed
+    if (num >= 10 || suffixIndex == 0)
+        return QString::number(static_cast<qint64>(num)) + suffixes[suffixIndex];
+    else
+        return QString::number(num, 'f', 1) + suffixes[suffixIndex];
+}
+
+static QString joinPathMain(const QString& base,
+                        const QString& name)
+{
+    if (base.isEmpty())
+        return name;
+
+    if (base.back() == '\\')
+        return base + name;
+
+    return base + "\\" + name;
+}
+
 
 struct NodeDisk {
     QString name;
     quint64 size;
+    quint64 childrenSize;
     bool isDir;
     bool scanned;
     qint64 lastModified;
@@ -76,6 +117,7 @@ void flattenTree(const std::shared_ptr<Node>& node,
     d.name = node->name;
     //d.path = node->path;
     d.size = node->size;
+    d.childrenSize = node->children_objects_len;
     d.isDir = node->isDir;
     d.scanned = node->scanned;
     d.lastModified = node->lastModified;
@@ -100,7 +142,7 @@ bool saveBinary(const QHash<QString, std::shared_ptr<Node>>& hash,
 
     // Optional: magic + version
     out << quint32(0x5343414E); // "SCAN"
-    out << quint16(1);          // version
+    out << quint16(2);          // version
 
     out << quint32(hash.size());
 
@@ -114,6 +156,7 @@ bool saveBinary(const QHash<QString, std::shared_ptr<Node>>& hash,
         for (const auto& d : flat) {
             out << d.name
                 << d.size
+                << d.childrenSize
                 << d.isDir
                 << d.scanned
                 << d.lastModified
@@ -165,7 +208,7 @@ bool MainWindow::loadBinary(QHash<QString, std::shared_ptr<Node>>& hash,
     quint16 version;
     in >> magic >> version;
 
-    if (magic != 0x5343414E || version != 1)
+    if (magic != 0x5343414E || version != 2)
         return false;
     qInfo() << "correct magic and version" << fileName;
 
@@ -195,6 +238,7 @@ bool MainWindow::loadBinary(QHash<QString, std::shared_ptr<Node>>& hash,
             nodes[i] = std::make_shared<Node>();
             in >> nodes[i]->name
                 >> nodes[i]->size
+                >> nodes[i]->children_objects_len
                 >> nodes[i]->isDir
                 >> nodes[i]->scanned
                 >> nodes[i]->lastModified
@@ -329,6 +373,33 @@ void MainWindow::navigate(const QModelIndex& index) {
 
 }
 
+
+
+int last_index = -1;
+int last_index_count = 0;
+
+void MainWindow::sectionClick(const int index){
+    qInfo() << "section click! " << index;
+
+    proxyModel->setSortCaseSensitivity(Qt::CaseInsensitive);
+
+    auto order = Qt::DescendingOrder;
+
+    if (last_index == index){
+        if (last_index_count % 2 == 0)
+            order = Qt::AscendingOrder;
+        last_index_count++;
+    }else{
+        last_index_count=0;
+    }
+
+    proxyModel->sort(index, order);
+
+
+    last_index = index;
+
+}
+
 void MainWindow::goBack() {
     if (current){
         qInfo() << "going back, current "<<current->path() << ", current parent" << current->parent.get();
@@ -370,6 +441,7 @@ void MainWindow::setupUi()
     pathEdit->setDuplicatesEnabled(false);
 
     scanButton = new QPushButton("Scan", this);
+    refreshButton = new QPushButton("Refresh", this);
     backBtn = new QPushButton("Back");
     backBtn->setMaximumWidth(50);
 
@@ -420,6 +492,10 @@ void MainWindow::setupUi()
     //table->horizontalHeader()->minimumWidth()
     table->horizontalHeader()->resizeSection(COLUMN_INDEX, 3);
     table->horizontalHeader()->resizeSection(COLUMN_ICON, 10);
+
+    table->horizontalHeader()->resizeSection(COLUMN_SIZE, 70);
+    table->horizontalHeader()->resizeSection(COLUMN_CHILDREN_OBJECTS_LEN, 50);
+    table->horizontalHeader()->resizeSection(COLUMN_TYPE, 50);
     //table->horizontalHeader()->setSectionResizeMode(table->columnCount()-1, QHeaderView::Fixed);
     table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
 
@@ -447,12 +523,13 @@ void MainWindow::setupUi()
     table->setSortingEnabled(false);
 
     proxyModel->setSortRole(Qt::UserRole);
-    proxyModel->sort(COLUMN_SIZE, Qt::DescendingOrder);
+    proxyModel->sort(COLUMN_INDEX, Qt::AscendingOrder);
 
     topLayout->addWidget(backBtn);
     topLayout->addWidget(driveCombo);
     topLayout->addWidget(pathEdit,1);
     topLayout->addWidget(scanButton);
+    topLayout->addWidget(refreshButton);
 
 
     mainLayout->addLayout(topLayout);
@@ -469,6 +546,11 @@ void MainWindow::setupUi()
 
     connect(scanButton, &QPushButton::clicked,
             this, &MainWindow::startScan);
+
+    connect(refreshButton, &QPushButton::clicked,
+            this, [this](){
+                startPartScan(current);
+            });
 
     pathEdit->setCurrentText("C:\\");
     connect(driveCombo, &QComboBox::currentTextChanged,
@@ -529,7 +611,10 @@ void MainWindow::setupUi()
     connect(backBtn, &QPushButton::clicked, this, &MainWindow::goBack);
     //connect(table, &QTableWidget::itemDoubleClicked, this, &MainWindow::navigate);
 
-    connect(table, &QTableView::doubleClicked,this, &MainWindow::navigate);
+    connect(table, &QTableView::doubleClicked, this, &MainWindow::navigate);
+
+    connect(header, &QHeaderView::sectionClicked, this, &MainWindow::sectionClick);
+
 
     /*connect(table->horizontalHeader(), &QHeaderView::sectionResized,
             this, [this](int logicalIndex, int oldSize, int newSize) {
@@ -716,7 +801,7 @@ void MainWindow::updateProgress()
     progressBar->setValue(
         static_cast<int>(std::max<double>(0,std::min<double>((processedSize * 10000) / (totalSize * 1.01),9999))));
 
-    label->setText(pretty(processedSize));
+    label->setText(prettySizeMain(processedSize));
 }
 
 void MainWindow::scanFinished()
@@ -736,6 +821,7 @@ void MainWindow::scanFinished()
 
     //progressBar->setValue(10000);
     //progressBar->setEnabled(false);
+    proxyModel->sort(COLUMN_INDEX,Qt::AscendingOrder);
     populateTable(current);
     table->setDisabled(false);
     progressBar->setValue(10000);
@@ -792,7 +878,7 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
 {
 
 
-    proxyModel->sort(COLUMN_SIZE, Qt::DescendingOrder);
+    //proxyModel->sort(COLUMN_SIZE, Qt::DescendingOrder);
     table->setUpdatesEnabled(false);
     table->setSortingEnabled(false);
 
@@ -804,11 +890,132 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
     QVector<FileRow> rows;
     rows.reserve(node->children.size());
 
+    bool check_actuality = true;
+
+    QDir dir(node->path());
+    dir.setFilter(
+        QDir::NoDotAndDotDot |
+        QDir::AllEntries |
+        QDir::Hidden |
+        QDir::System
+        );
+
+    for (int i =0 ;i < dir.count();i++){
+        qInfo()<<dir.entryList()[i];
+    }
+    qInfo()<<" ";
+
+    for (int i =0 ;i < node->children.size();i++){
+        qInfo()<<node->children[i]->name;
+    }
+
+    if (node->children.size()<10000){
+        QFileInfoList real_files_info = dir.entryInfoList();
+        QStringList real_files = dir.entryList();
+        QSet<QString> real_files_set(real_files.begin(), real_files.end());
+
+        QStringList real_nodes_names;
+        for (const auto& child : node->children) {
+            real_nodes_names.append(child->name);
+        }
+        QSet<QString> real_nodes_names_set(real_nodes_names.begin(), real_nodes_names.end());
+
+        QVector<int> toAdd;
+        QVector<int> toDelete;
+
+
+        for (int i =0;i< real_files.size();i++){
+            const auto& file = real_files[i];
+            if(!real_nodes_names_set.contains(file)){
+                qInfo()<< "real_nodes_names_set does not contain "+file;
+                toAdd.append(i);
+                check_actuality = false;
+            }
+
+        }
+        std::sort(toAdd.begin(), toAdd.end(), std::greater<int>());
+
+
+        for (int i =0;i< real_nodes_names.size();i++) {
+            const auto& node_name = real_nodes_names[i];
+            if(!real_files_set.contains(node_name)){
+                qInfo()<< "real_files_set does not contain "+node_name;
+                toDelete.append(i);
+                check_actuality = false;
+            }
+        }
+        std::sort(toDelete.begin(), toDelete.end(), std::greater<int>());
+
+        for (int row : toDelete) {
+            Node* node_delete = current->children[row].get();
+            current->size -= node_delete->size;
+            current->children_objects_len -= node_delete->children_objects_len+1;
+
+            std::shared_ptr<Node> node_current = current;
+            while(node_current->parent){
+                node_current->parent->size -= node_delete->size;
+                node_current->parent->children_objects_len -= node_delete->children_objects_len+1;
+                node_current = node_current->parent;
+            }
+            current->children.erase(current->children.begin() + row);
+
+        }
+
+        for (int row : toAdd) {
+
+            auto child = std::make_shared<Node>();
+            auto info = real_files_info[row];
+            child->name = info.fileName();
+            child->cachedPath = joinPathMain(node->path(), info.fileName());
+            child->parent = node;
+            child->isDir = info.isDir();
+            child->lastModified = info.lastModified().toSecsSinceEpoch();
+
+            if (real_files_info[row].isDir()){
+                child->size = 0;
+            }else{
+                child->size = info.size();
+            }
+
+            current->size += child->size;
+            current->children_objects_len += 1;
+
+            std::shared_ptr<Node> node_current = current;
+            while(node_current->parent){
+                node_current->parent->size += child->size;
+                node_current->parent->children_objects_len += 1;
+                node_current = node_current->parent;
+                std::sort(node_current->children.begin(), node_current->children.end(),
+                          [](const auto& a, const auto& b) {
+                              return a->size > b->size;
+                          });
+            }
+
+            current->children.push_back(std::move(child));
+        }
+
+        if (toAdd.size()>0){
+            std::sort(current->children.begin(), current->children.end(),
+                      [](const auto& a, const auto& b) {
+                          return a->size > b->size;
+                      });
+        }
+
+
+        if (check_actuality){
+            qInfo()<< "Actuality check completed successfully";
+        }
+    }
+
+
+
+
     for (const auto& child : node->children) {
         rows.push_back({
             child->name,
             child->path(),
             child->size,
+            child->children_objects_len,
             QDateTime::fromSecsSinceEpoch(child->lastModified),
             child->isDir,
             child->isDir ? folderPlaceholder : filePlaceholder
@@ -818,12 +1025,12 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
 
     fileModel->setRows(std::move(rows));
 
-    proxyModel->sort(COLUMN_INDEX, Qt::AscendingOrder);
+    //proxyModel->sort(COLUMN_INDEX, Qt::AscendingOrder);
 
     if (node->parent)
-        fileModel->prependRow({"..","../",node->size,QDateTime(),1,filePlaceholder});
+        fileModel->prependRow({"..","../",node->size,node->children_objects_len,QDateTime(),1,filePlaceholder});
 
-    label->setText(pretty(node->size));
+    label->setText(prettySizeMain(node->size));
 
     table->setUpdatesEnabled(true);
     //table->setSortingEnabled(true);
@@ -848,7 +1055,7 @@ void MainWindow::onNodeUpdated(uint64_t newSize, std::shared_ptr<Node> node)
     if ((l1Files % 1000 == 0) || timer.elapsed() > 50) {
         if (Name2Index.contains(node->name)){
             //qInfo() << "changing size";
-            fileModel->changeRowSize(Name2Index[node->name],l1Size);
+            fileModel->changeRowSize(Name2Index[node->name],l1Size,l1Files);
             timer.restart();
         }
     }
@@ -865,6 +1072,7 @@ void MainWindow::onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node)
     if (node){
         qInfo() << "finalizing row table" << node->path();
         l1Size = 0;
+        l1Files = 0;
         //fileModel->changeLastRowSize(node->size);
         //table->setSortingEnabled(true);
     }
@@ -881,6 +1089,7 @@ void MainWindow::onNodeStarted(uint64_t newSize,std::shared_ptr<Node> node)
         node->name,
         node->path(),
         node->size,
+        node->children_objects_len,
         QDateTime::fromSecsSinceEpoch(node->lastModified),
         node->isDir,
         node->isDir ? folderPlaceholder : filePlaceholder
@@ -911,6 +1120,7 @@ void MainWindow::showContextMenu(const QPoint& pos)
 
         QStringList paths;
         QStringList names;
+        QStringList sizes;
         QVector<int> rows;
         QVector<Node*> nodes;
 
@@ -922,13 +1132,15 @@ void MainWindow::showContextMenu(const QPoint& pos)
 
             QString path = fileModel->pathAt(row);
             QString name = fileModel->nameAt(row);
+            QString size = prettySizeMain(fileModel->sizeAt(row));
 
             rows.append(row);
             names.append(name);
             paths.append(path);
+            sizes.append(size);
         }
 
-        confirmMultiDelete(paths, names, rows);
+        confirmMultiDelete(paths, names, sizes, rows);
     }
 
     if (chosen == open){
@@ -941,6 +1153,7 @@ void MainWindow::showContextMenu(const QPoint& pos)
 
 void MainWindow::confirmMultiDelete(const QStringList& paths,
                                const QStringList& names,
+                               const QStringList& sizes,
                                const QVector<int>& rows)
 {
     Q_ASSERT(paths.size() == names.size());
@@ -978,7 +1191,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
     if (reply != QMessageBox::Yes)
         return;*/
 
-    if (!showDeleteConfirmDialog(names)) {
+    if (!showDeleteConfirmDialog(names, sizes)) {
         return;
     }
 
@@ -991,37 +1204,83 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
         return;
     }
 
-    // Move all to recycle bin first
-    for (const QString& path : paths) {
-        qInfo() << "multi deleting" << path;
-        if (!moveToRecycleBin(path)) {
+    qInfo() << "invoking deletion in a separate thread";
+
+    table->setEnabled(false);
+
+
+    auto future = QtConcurrent::run([paths, this]() {
+
+        int processed = 0;
+        int total_paths = paths.size();
+
+        for (const QString& path : paths) {
+
+            QMetaObject::invokeMethod(this, [=]() {
+                progressBar->setValue(processed * 10000 / total_paths);
+                label->setText("Deleting "+ path);
+            }, Qt::QueuedConnection);
+
+            if (!moveToRecycleBin(path))
+                return false;
+
+            processed++;
+        }
+
+        QMetaObject::invokeMethod(this, [=]() {
+            progressBar->setValue(10000);
+        }, Qt::QueuedConnection);
+
+        return true;
+    });
+
+    auto *watcher = new QFutureWatcher<bool>(this);
+
+    connect(watcher, &QFutureWatcher<bool>::finished, this, [=]() {
+        if (!watcher->result()) {
             QMessageBox::critical(
                 this,
                 "Error",
                 "Failed to move one or more items to Recycle Bin."
                 );
-            return;
+        } else {
+            // model + UI updates stay on GUI thread
+            // Remove from model (IMPORTANT: remove from highest row to lowest)
+            QVector<int> sortedRows = rows;
+            std::sort(sortedRows.begin(), sortedRows.end(), std::greater<int>());
+
+
+            for (int row : sortedRows) {
+                if (current->parent){
+                    row = row-1;
+                }
+                Node* node = current->children[row].get();
+                current->size -= node->size;
+                current->children_objects_len -= node->children_objects_len+1;
+
+                std::shared_ptr<Node> node_current = current;
+                while(node_current->parent){
+                    node_current->parent->size -= node->size;
+                    node_current->parent->children_objects_len -= node->children_objects_len+1;
+
+                    node_current = node_current->parent;
+
+                }
+                current->children.erase(current->children.begin() + row);
+
+            }
+
+            populateTable(current);
         }
-    }
 
-    // Remove from model (IMPORTANT: remove from highest row to lowest)
-    QVector<int> sortedRows = rows;
-    std::sort(sortedRows.begin(), sortedRows.end(), std::greater<int>());
+        table->setEnabled(true);
+        watcher->deleteLater();
+    });
 
-
-    for (int row : sortedRows) {
-        if (current->parent){
-            row = row-1;
-            Node* node = current->children[row].get();
-            current->size -= node->size;
-            current->children.erase(current->children.begin() + row);
-        }
-    }
-
-    populateTable(current);
+    watcher->setFuture(future);
 }
 
-bool MainWindow::showDeleteConfirmDialog(const QStringList& names)
+bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes)
 {
     QDialog dialog(this);
     dialog.setWindowTitle("Confirm delete");
@@ -1042,17 +1301,44 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names)
 
 
     QWidget* content = new QWidget(&dialog);
-    auto* contentLayout = new QVBoxLayout;
-    content->setLayout(contentLayout);
+    auto* contentLayout = new QVBoxLayout(content);
 
-    for (const QString& name : names) {
-        QLabel* label = new QLabel(name);
-        label->setWordWrap(true);
-        contentLayout->addWidget(label);
+    for (int i = 0; i < names.size(); ++i) {
+
+        auto* contentLayoutLine = new QHBoxLayout;
+
+        QLabel* label1 = new QLabel(names[i]);
+        QLabel* label2 = new QLabel("[" + sizes[i] + "]");
+
+        contentLayoutLine->addWidget(label1);
+        contentLayoutLine->addStretch();
+        contentLayoutLine->addWidget(label2);
+
+        contentLayout->addLayout(contentLayoutLine);
+
     }
 
+
+    /*QWidget* content = new QWidget(&dialog);
+    auto* grid = new QGridLayout(content);
+
+    for (int i = 0; i < names.size(); ++i) {
+        QLabel* nameLabel = new QLabel(names[i]);
+        QLabel* sizeLabel = new QLabel("[" + sizes[i] + "]");
+
+        sizeLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        grid->addWidget(nameLabel, i, 0);
+        grid->addWidget(sizeLabel, i, 1);
+    }
+
+    // push column 1 to the right
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 0);
+
+
     scrollArea->setWidget(content);
-    mainLayout->addWidget(scrollArea);
+    mainLayout->addWidget(scrollArea);*/
 
     // Buttons
     QDialogButtonBox* buttons =
@@ -1070,19 +1356,8 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names)
 
 bool MainWindow::moveToRecycleBin(const QString& path)
 {
-    std::wstring wpath = path.toStdWString();
-    wpath.push_back(L'\0'); // double-null terminated
-
-    SHFILEOPSTRUCTW op{};
-    op.wFunc = FO_DELETE;
-    op.pFrom = wpath.c_str();
-    op.fFlags =
-        FOF_ALLOWUNDO |     // Recycle Bin
-        FOF_NOCONFIRMATION |
-        FOF_NOERRORUI |
-        FOF_SILENT;
-
-    return SHFileOperationW(&op) == 0;
+    qInfo() << "Recycle thread:" << QThread::currentThread();
+    return QFile::moveToTrash(path);
 }
 
 
