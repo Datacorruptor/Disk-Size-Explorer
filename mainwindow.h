@@ -89,13 +89,13 @@ private:
     void onNodeUpdated(uint64_t newSize, std::shared_ptr<Node> node);
     void onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node);
     void onScanFinished(uint64_t newSize, std::shared_ptr<Node> node);
-    void confirmMultiDelete(const QStringList& paths,const QStringList& names,const QStringList& sizes,const QVector<int>& rows);
-    bool moveToRecycleBin(const QString& path);
+    void confirmMultiDelete(const QStringList& paths,const QStringList& names,const QStringList& sizes,const QVector<int>& rows, bool foreverDelete);
+    bool moveToRecycleBin(const QString& path, bool foreverDelete);
     QString joinPathWin(const QString& base, const QString& name);
     void saveInBackground(QHash<QString, std::shared_ptr<Node>> scanResultHash);
     void closeEvent(QCloseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
-    bool showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes);
+    bool showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes, bool foreverDelete);
     bool loadBinary(QHash<QString, std::shared_ptr<Node>>& hash,const QString& fileName);
     void saveBeforeExit();
 

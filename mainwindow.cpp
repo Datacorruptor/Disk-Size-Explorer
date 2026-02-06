@@ -1128,19 +1128,22 @@ void MainWindow::showContextMenu(const QPoint& pos)
 
         foreach (const QModelIndex &index, selectedIndexes) {
             int row = index.row();
-            qInfo() << "selected row:" <<row;
-
             QString path = fileModel->pathAt(row);
             QString name = fileModel->nameAt(row);
             QString size = prettySizeMain(fileModel->sizeAt(row));
+
+            qInfo() << "selected row:" <<row << " " << name << " " << size;
 
             rows.append(row);
             names.append(name);
             paths.append(path);
             sizes.append(size);
+
+
+
         }
 
-        confirmMultiDelete(paths, names, sizes, rows);
+        confirmMultiDelete(paths, names, sizes, rows, false);
     }
 
     if (chosen == open){
@@ -1154,7 +1157,8 @@ void MainWindow::showContextMenu(const QPoint& pos)
 void MainWindow::confirmMultiDelete(const QStringList& paths,
                                const QStringList& names,
                                const QStringList& sizes,
-                               const QVector<int>& rows)
+                               const QVector<int>& rows,
+                               bool foreverDelete)
 {
     Q_ASSERT(paths.size() == names.size());
     Q_ASSERT(paths.size() == rows.size());
@@ -1162,36 +1166,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
     if (paths.isEmpty())
         return;
 
-    // Build confirmation text
-    QString text;
-    if (names.size() == 1) {
-        text = QString("Move to Recycle Bin:\n\n%1").arg(names.first());
-    } else {
-        text = QString("Move %1 items to Recycle Bin:\n\n").arg(names.size());
-        int counter = 0;
-        for (const QString& name : names)
-        {
-            if (counter > 30){
-                text += "...";
-                break;
-            }
-            text += name + '\n';
-            counter++;
-        }
-
-    }
-
-    /*auto reply = QMessageBox::warning(
-        this,
-        "Confirm delete",
-        text,
-        QMessageBox::Yes | QMessageBox::No
-        );
-
-    if (reply != QMessageBox::Yes)
-        return;*/
-
-    if (!showDeleteConfirmDialog(names, sizes)) {
+    if (!showDeleteConfirmDialog(names, sizes, foreverDelete)) {
         return;
     }
 
@@ -1209,8 +1184,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
     table->setEnabled(false);
 
 
-    auto future = QtConcurrent::run([paths, this]() {
-
+    auto future = QtConcurrent::run([paths,foreverDelete, this]() {
         int processed = 0;
         int total_paths = paths.size();
 
@@ -1221,7 +1195,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
                 label->setText("Deleting "+ path);
             }, Qt::QueuedConnection);
 
-            if (!moveToRecycleBin(path))
+            if (!moveToRecycleBin(path, foreverDelete))
                 return false;
 
             processed++;
@@ -1241,7 +1215,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
             QMessageBox::critical(
                 this,
                 "Error",
-                "Failed to move one or more items to Recycle Bin."
+                "System prevented this action"
                 );
         } else {
             // model + UI updates stay on GUI thread
@@ -1280,18 +1254,23 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
     watcher->setFuture(future);
 }
 
-bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes)
+bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QStringList& sizes, bool foreverDelete)
 {
     QDialog dialog(this);
     dialog.setWindowTitle("Confirm delete");
     dialog.setModal(true);
     dialog.resize(450, 300);
 
+
     QVBoxLayout* mainLayout = new QVBoxLayout(&dialog);
 
-    QLabel* header = new QLabel(
-        QString("Move %1 items to Recycle Bin:").arg(names.size())
-        );
+
+    QString headerText = QString("Move %1 items to Recycle Bin:").arg(names.size());
+    if (foreverDelete){
+        headerText = QString("Are you sure you want to PERMANENTLY DELETE these %1 items:").arg(names.size());
+    }
+
+    QLabel* header = new QLabel(headerText);
     mainLayout->addWidget(header);
 
     // Scroll area
@@ -1308,7 +1287,7 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QString
         auto* contentLayoutLine = new QHBoxLayout;
 
         QLabel* label1 = new QLabel(names[i]);
-        QLabel* label2 = new QLabel("[" + sizes[i] + "]");
+        QLabel* label2 = new QLabel(sizes[i]);
 
         contentLayoutLine->addWidget(label1);
         contentLayoutLine->addStretch();
@@ -1336,9 +1315,9 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QString
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 0);
 
-
+    */
     scrollArea->setWidget(content);
-    mainLayout->addWidget(scrollArea);*/
+    mainLayout->addWidget(scrollArea);
 
     // Buttons
     QDialogButtonBox* buttons =
@@ -1354,21 +1333,65 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QString
 }
 
 
-bool MainWindow::moveToRecycleBin(const QString& path)
+bool MainWindow::moveToRecycleBin(const QString& path, bool foreverDelete)
 {
     qInfo() << "Recycle thread:" << QThread::currentThread();
-    return QFile::moveToTrash(path);
+
+    if (foreverDelete){
+       return QFile::remove(path);
+    }
+    else{
+       return QFile::moveToTrash(path);
+    }
 }
 
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Backspace) {
+
+    switch (event->key()) {
+    case  Qt::Key_Backspace:
         goBack();
-    }
-    else {
+        break;
+
+    case Qt::Key_Delete:{
+
+        bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
+        QStringList paths;
+        QStringList names;
+        QStringList sizes;
+        QVector<int> rows;
+        QVector<Node*> nodes;
+
+        QList<QModelIndex> selectedIndexes = table->selectionModel()->selectedRows();
+
+        foreach (const QModelIndex &index, selectedIndexes) {
+            int row = index.row();
+            QString path = fileModel->pathAt(row);
+            QString name = fileModel->nameAt(row);
+            QString size = prettySizeMain(fileModel->sizeAt(row));
+
+            qInfo() << "selected row:" <<row << " " << name << " " << size;
+
+
+
+            rows.append(row);
+            names.append(name);
+            paths.append(path);
+            sizes.append(size);
+        }
+
+        confirmMultiDelete(paths, names, sizes, rows, shiftPressed);
+
+
+
+        break;}
+
+    default:
         QMainWindow::keyPressEvent(event);
+        break;
     }
+
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
