@@ -876,7 +876,7 @@ void MainWindow::populateTableIncremental(
 
 void MainWindow::populateTable(std::shared_ptr<Node> node)
 {
-
+    qInfo() << "started populating table";
 
     //proxyModel->sort(COLUMN_SIZE, Qt::DescendingOrder);
     table->setUpdatesEnabled(false);
@@ -900,16 +900,20 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
         QDir::System
         );
 
-    for (int i =0 ;i < dir.count();i++){
-        qInfo()<<dir.entryList()[i];
-    }
-    qInfo()<<" ";
-
-    for (int i =0 ;i < node->children.size();i++){
-        qInfo()<<node->children[i]->name;
-    }
+    qInfo() << "created dir filters";
 
     if (node->children.size()<10000){
+
+        for (int i =0 ;i < dir.count();i++){
+            qInfo()<<dir.entryList()[i];
+        }
+        qInfo()<<" ";
+
+        for (int i =0 ;i < node->children.size();i++){
+            qInfo()<<node->children[i]->name;
+        }
+
+
         QFileInfoList real_files_info = dir.entryInfoList();
         QStringList real_files = dir.entryList();
         QSet<QString> real_files_set(real_files.begin(), real_files.end());
@@ -1070,7 +1074,7 @@ void MainWindow::onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node)
     QMetaObject::invokeMethod(this, "updateProgress", Qt::QueuedConnection);
 
     if (node){
-        qInfo() << "finalizing row table" << node->path();
+        //qInfo() << "finalizing row table" << node->path();
         l1Size = 0;
         l1Files = 0;
         //fileModel->changeLastRowSize(node->size);
@@ -1083,7 +1087,7 @@ void MainWindow::onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node)
 void MainWindow::onNodeStarted(uint64_t newSize,std::shared_ptr<Node> node)
 {
     table->setSortingEnabled(false);
-    qInfo() << "adding row table" << node->path();
+    //qInfo() << "adding row table" << node->path();
 
     Name2Index[node->name] = fileModel->insertRow({
         node->name,
@@ -1127,7 +1131,15 @@ void MainWindow::showContextMenu(const QPoint& pos)
         QList<QModelIndex> selectedIndexes = table->selectionModel()->selectedRows();
 
         foreach (const QModelIndex &index, selectedIndexes) {
-            int row = index.row();
+            //int row = index.row();
+
+            QModelIndex src = proxyModel->mapToSource(index);
+            int row = src.row();
+
+            /*QModelIndex firstColumnIndex = index.sibling(index.row(), 0);
+            QVariant value = firstColumnIndex.data();
+            int row = value.toInt();*/
+
             QString path = fileModel->pathAt(row);
             QString name = fileModel->nameAt(row);
             QString size = prettySizeMain(fileModel->sizeAt(row));
@@ -1184,7 +1196,7 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
     table->setEnabled(false);
 
 
-    auto future = QtConcurrent::run([paths,foreverDelete, this]() {
+    auto future = QtConcurrent::run([paths, foreverDelete, this]() -> std::pair<bool, QString> {
         int processed = 0;
         int total_paths = paths.size();
 
@@ -1195,8 +1207,9 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
                 label->setText("Deleting "+ path);
             }, Qt::QueuedConnection);
 
-            if (!moveToRecycleBin(path, foreverDelete))
-                return false;
+            auto [success, error] = moveToRecycleBin(path, foreverDelete);
+            if (!success)
+                return {false, error};
 
             processed++;
         }
@@ -1205,17 +1218,21 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
             progressBar->setValue(10000);
         }, Qt::QueuedConnection);
 
-        return true;
+        return {true, ""};
     });
 
-    auto *watcher = new QFutureWatcher<bool>(this);
 
-    connect(watcher, &QFutureWatcher<bool>::finished, this, [=]() {
-        if (!watcher->result()) {
+    auto *watcher = new QFutureWatcher<std::pair<bool, QString>>(this);
+
+    connect(watcher, &QFutureWatcher<std::pair<bool, QString>>::finished, this, [=]() {
+        auto [success, error] = watcher->result();
+        if (!success) {
+
+
             QMessageBox::critical(
                 this,
                 "Error",
-                "System prevented this action"
+                "System prevented this action:\n" + error
                 );
         } else {
             // model + UI updates stay on GUI thread
@@ -1333,15 +1350,42 @@ bool MainWindow::showDeleteConfirmDialog(const QStringList& names, const QString
 }
 
 
-bool MainWindow::moveToRecycleBin(const QString& path, bool foreverDelete)
+std::pair<bool, QString> MainWindow::moveToRecycleBin(const QString& path, bool foreverDelete)
 {
     qInfo() << "Recycle thread:" << QThread::currentThread();
 
-    if (foreverDelete){
-       return QFile::remove(path);
+    QFileInfo info(path);
+    if (!info.exists()) {
+        return {false, "file or directory does not exist " + path};
     }
-    else{
-       return QFile::moveToTrash(path);
+
+    if (foreverDelete) {
+        if (info.isFile()) {
+            QFile file(path);
+            if (!file.remove()) {
+                return {false, file.errorString() + " " + path};
+            } else{
+                return {true, ""};
+            }
+        } else if (info.isDir()) {
+            QDir dir(path);
+            if (!dir.removeRecursively()) {
+                return {false, "Failed to remove directory " + path};
+            }else{
+                return {true, ""};
+            }
+        }
+        else{
+            return {false, "Unknown object type" + path};
+        }
+    } else {
+        // move to trash
+        if (!QFile::moveToTrash(path)) {  // works for files and directories, but may fail if locked
+            return {false, "Failed to move to trash " + path};
+        }
+        else{
+            return {true, ""};
+        }
     }
 }
 
@@ -1366,14 +1410,14 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         QList<QModelIndex> selectedIndexes = table->selectionModel()->selectedRows();
 
         foreach (const QModelIndex &index, selectedIndexes) {
-            int row = index.row();
+            QModelIndex src = proxyModel->mapToSource(index);
+            int row = src.row();
+
             QString path = fileModel->pathAt(row);
             QString name = fileModel->nameAt(row);
             QString size = prettySizeMain(fileModel->sizeAt(row));
 
             qInfo() << "selected row:" <<row << " " << name << " " << size;
-
-
 
             rows.append(row);
             names.append(name);

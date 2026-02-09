@@ -41,6 +41,10 @@ target_link_libraries(DiskSizeExplorer PRIVATE
     Qt6::Widgets
 )
 
+if (MSVC)
+    target_link_options(DiskSizeExplorer PRIVATE "/MANIFEST:NO")
+endif()
+
 
 set_target_properties(DiskSizeExplorer PROPERTIES
     WIN32_EXECUTABLE TRUE

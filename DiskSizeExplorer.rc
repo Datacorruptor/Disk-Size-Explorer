@@ -1,1 +1,5 @@
+#include <windows.h>
+
 IDI_ICON1 ICON DISCARDABLE "logo.ico"
+
+1 RT_MANIFEST "DiskSizeExplorer.manifest"

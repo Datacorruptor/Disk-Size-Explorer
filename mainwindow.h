@@ -90,7 +90,7 @@ private:
     void onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node);
     void onScanFinished(uint64_t newSize, std::shared_ptr<Node> node);
     void confirmMultiDelete(const QStringList& paths,const QStringList& names,const QStringList& sizes,const QVector<int>& rows, bool foreverDelete);
-    bool moveToRecycleBin(const QString& path, bool foreverDelete);
+    std::pair<bool, QString> moveToRecycleBin(const QString& path, bool foreverDelete);
     QString joinPathWin(const QString& base, const QString& name);
     void saveInBackground(QHash<QString, std::shared_ptr<Node>> scanResultHash);
     void closeEvent(QCloseEvent *event) override;
