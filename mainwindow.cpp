@@ -10,6 +10,7 @@
 #include <shellapi.h>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QShortcut>
 
 #include <thread>
 
@@ -362,6 +363,7 @@ void MainWindow::navigate(const QModelIndex& index) {
     }
 
     if (isDir){
+        backlog.clear();
         qInfo() << "node" <<current->children[row]->name;
         //pathEdit->setText(joinPathWin(pathEdit->text().toStdString(), current->children[row]->name).c_str());
         pathEdit->setCurrentText(current->children[row]->path());
@@ -394,6 +396,8 @@ void MainWindow::sectionClick(const int index){
     }
 
     proxyModel->sort(index, order);
+    table->horizontalHeader()->setSortIndicator(index, order);
+    table->horizontalHeader()->setSortIndicatorShown(true);
 
 
     last_index = index;
@@ -405,8 +409,21 @@ void MainWindow::goBack() {
         qInfo() << "going back, current "<<current->path() << ", current parent" << current->parent.get();
 
         if (current->parent) {
+            backlog.append(current);
             pathEdit->setCurrentText(current->parent->path());
-            populateTable(current->parent);
+            populateTable(current->parent, current->name);
+        }
+    }
+}
+
+void MainWindow::goFwd() {
+    if (current){
+        qInfo() << "going forward, current "<<current->path();
+
+        if (!backlog.isEmpty()) {
+            auto last = backlog.takeLast();
+            pathEdit->setCurrentText(last->path());
+            populateTable(last);
         }
     }
 }
@@ -442,8 +459,13 @@ void MainWindow::setupUi()
 
     scanButton = new QPushButton("Scan", this);
     refreshButton = new QPushButton("Refresh", this);
-    backBtn = new QPushButton("Back");
-    backBtn->setMaximumWidth(50);
+    backBtn = new QPushButton("");
+    backBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowBack));
+    backBtn->setMaximumWidth(30);
+
+    fwdBtn = new QPushButton("");
+    fwdBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowForward));
+    fwdBtn->setMaximumWidth(30);
 
     progressBar = new FractionalProgressBar(this);
     progressBar->setRange(0, 10000);
@@ -500,10 +522,17 @@ void MainWindow::setupUi()
     table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
 
     auto* header = table->horizontalHeader();
+    header->setStyleSheet(
+        "QHeaderView::section:sortIndicator {"
+        "   font-weight: bold;"
+        "}"
+        );
 
     // Allow user resizing
     header->setSectionsMovable(true);
     header->setStretchLastSection(false);
+    header->setSortIndicatorShown(true);
+    //header->setSortIndicatorEnabled(false);
 
     // Stretch ONLY column 1
     header->setSectionResizeMode(COLUMN_NAME, QHeaderView::Stretch);
@@ -526,6 +555,7 @@ void MainWindow::setupUi()
     proxyModel->sort(COLUMN_INDEX, Qt::AscendingOrder);
 
     topLayout->addWidget(backBtn);
+    topLayout->addWidget(fwdBtn);
     topLayout->addWidget(driveCombo);
     topLayout->addWidget(pathEdit,1);
     topLayout->addWidget(scanButton);
@@ -609,6 +639,7 @@ void MainWindow::setupUi()
             this, &MainWindow::showContextMenu);
 
     connect(backBtn, &QPushButton::clicked, this, &MainWindow::goBack);
+    connect(fwdBtn, &QPushButton::clicked, this, &MainWindow::goFwd);
     //connect(table, &QTableWidget::itemDoubleClicked, this, &MainWindow::navigate);
 
     connect(table, &QTableView::doubleClicked, this, &MainWindow::navigate);
@@ -668,8 +699,9 @@ void MainWindow::setupUi()
         });
     });
 
-
-
+    new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Left), this, SLOT(goBack()));
+    new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Up), this, SLOT(goBack()));
+    new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Right), this, SLOT(goFwd()));
 
     QString path = pathEdit->currentText().trimmed(); // remove accidental spaces
 
@@ -830,51 +862,22 @@ void MainWindow::scanFinished()
 }
 
 
-void MainWindow::populateTableIncremental(
-    const QVector<FileRow>& allRows)
-{
-    constexpr int CHUNK_SIZE = 999999;
+bool MainWindow::deleteFromNodes(int row){
+    Node* node_delete = current->children[row].get();
+    current->size -= node_delete->size;
+    current->children_objects_len -= node_delete->children_objects_len+1;
 
-    table->setUpdatesEnabled(true);
-    fileModel->clear();
-
-    auto* rowsPtr = new QVector<FileRow>(std::move(allRows));
-    auto* index   = new int(0);
-
-    QTimer* timer = new QTimer(this);
-    timer->setInterval(0); // let event loop run
-
-    connect(timer, &QTimer::timeout, this,
-            [=]() mutable {
-                if (*index >= rowsPtr->size()) {
-                    timer->stop();
-                    timer->deleteLater();
-
-                    //table->setSortingEnabled(true);
-                    proxyModel->sort(COLUMN_SIZE, Qt::DescendingOrder);
-
-                    delete rowsPtr;
-                    delete index;
-                    return;
-                }
-
-                QVector<FileRow> chunk;
-                chunk.reserve(CHUNK_SIZE);
-
-                for (int i = 0;
-                     i < CHUNK_SIZE && *index < rowsPtr->size();
-                     ++i, ++(*index)) {
-                    chunk.push_back((*rowsPtr)[*index]);
-                }
-
-                fileModel->appendRows(chunk);
-            });
-
-    timer->start();
+    std::shared_ptr<Node> node_current = current;
+    while(node_current->parent){
+        node_current->parent->size -= node_delete->size;
+        node_current->parent->children_objects_len -= node_delete->children_objects_len+1;
+        node_current = node_current->parent;
+    }
+    current->children.erase(current->children.begin() + row);
+    return true;
 }
 
-
-void MainWindow::populateTable(std::shared_ptr<Node> node)
+void MainWindow::populateTable(std::shared_ptr<Node> node, QString select)
 {
     qInfo() << "started populating table";
 
@@ -951,18 +954,7 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
         std::sort(toDelete.begin(), toDelete.end(), std::greater<int>());
 
         for (int row : toDelete) {
-            Node* node_delete = current->children[row].get();
-            current->size -= node_delete->size;
-            current->children_objects_len -= node_delete->children_objects_len+1;
-
-            std::shared_ptr<Node> node_current = current;
-            while(node_current->parent){
-                node_current->parent->size -= node_delete->size;
-                node_current->parent->children_objects_len -= node_delete->children_objects_len+1;
-                node_current = node_current->parent;
-            }
-            current->children.erase(current->children.begin() + row);
-
+            deleteFromNodes(row);
         }
 
         for (int row : toAdd) {
@@ -1012,9 +1004,10 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
     }
 
 
+    int select_row = -10;
+    for (int i = 0; i < node->children.size();i++){
 
-
-    for (const auto& child : node->children) {
+        const auto& child = node->children[i];
         rows.push_back({
             child->name,
             child->path(),
@@ -1032,7 +1025,9 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
     //proxyModel->sort(COLUMN_INDEX, Qt::AscendingOrder);
 
     if (node->parent)
-        fileModel->prependRow({"..","../",node->size,node->children_objects_len,QDateTime(),1,filePlaceholder});
+    {
+        fileModel->prependRow({"..","../",node->size+1,node->children_objects_len,QDateTime(),1,filePlaceholder});
+    }
 
     label->setText(prettySizeMain(node->size));
 
@@ -1040,6 +1035,15 @@ void MainWindow::populateTable(std::shared_ptr<Node> node)
     //table->setSortingEnabled(true);
 
     table->viewport()->update();
+
+    QModelIndex start = proxyModel->sourceModel()->index(0, COLUMN_NAME);
+    auto matches = proxyModel->sourceModel()->match(start,Qt::DisplayRole,select,1,Qt::MatchExactly);
+
+    if (!matches.isEmpty()) {
+        QModelIndex proxyIndex = proxyModel->mapFromSource(matches.first());
+        table->selectionModel()->select(proxyIndex,QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        table->scrollTo(proxyIndex);
+    }
 
     qInfo() << "Table populated in" << timer.elapsed() << "ms";
 }
@@ -1108,7 +1112,11 @@ void MainWindow::onNodeStarted(uint64_t newSize,std::shared_ptr<Node> node)
 
 void MainWindow::showContextMenu(const QPoint& pos)
 {
-    int selected_row = table->rowAt(pos.y());
+    //int selected_row = table->rowAt(pos.y());
+    const QModelIndex &selected_index = table->indexAt(pos);
+    QModelIndex selected_src = proxyModel->mapToSource(selected_index);
+    int selected_row = selected_src.row();
+
     if (selected_row < 0)
         return;
 
@@ -1159,10 +1167,16 @@ void MainWindow::showContextMenu(const QPoint& pos)
     }
 
     if (chosen == open){
+
+
+
         Node* node = current->children[selected_row].get();
-        QFileInfo fileInfo(node->path());
+        QString path = QDir::toNativeSeparators(node->path());
+        QProcess::startDetached("explorer", {"/select,", path});
+
+        /*QFileInfo fileInfo(node->path());
         QString dirPath = fileInfo.absoluteDir().absolutePath();
-        QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dirPath));*/
     }
 }
 
@@ -1245,22 +1259,8 @@ void MainWindow::confirmMultiDelete(const QStringList& paths,
                 if (current->parent){
                     row = row-1;
                 }
-                Node* node = current->children[row].get();
-                current->size -= node->size;
-                current->children_objects_len -= node->children_objects_len+1;
-
-                std::shared_ptr<Node> node_current = current;
-                while(node_current->parent){
-                    node_current->parent->size -= node->size;
-                    node_current->parent->children_objects_len -= node->children_objects_len+1;
-
-                    node_current = node_current->parent;
-
-                }
-                current->children.erase(current->children.begin() + row);
-
+                deleteFromNodes(row);
             }
-
             populateTable(current);
         }
 
@@ -1390,17 +1390,22 @@ std::pair<bool, QString> MainWindow::moveToRecycleBin(const QString& path, bool 
 }
 
 
+
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
+    qInfo() << "Key Event!!";
+    bool altPressed = event->modifiers() & Qt::AltModifier;
+    bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
 
     switch (event->key()) {
+
     case  Qt::Key_Backspace:
         goBack();
         break;
 
     case Qt::Key_Delete:{
 
-        bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
+
         QStringList paths;
         QStringList names;
         QStringList sizes;

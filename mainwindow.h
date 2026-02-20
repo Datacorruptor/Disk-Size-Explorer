@@ -80,11 +80,11 @@ private slots:
     void navigate(const QModelIndex& index);
     void sectionClick(const int index);
     void goBack();
+    void goFwd();
 
 private:
     void setupUi();
-    void populateTable(std::shared_ptr<Node> node);
-    void populateTableIncremental(const QVector<FileRow>& allRows);
+    void populateTable(std::shared_ptr<Node> node, QString select = "");
     void onNodeStarted(uint64_t newSize, std::shared_ptr<Node> node);
     void onNodeUpdated(uint64_t newSize, std::shared_ptr<Node> node);
     void onNodeFinished(uint64_t newSize, std::shared_ptr<Node> node);
@@ -99,11 +99,14 @@ private:
     bool loadBinary(QHash<QString, std::shared_ptr<Node>>& hash,const QString& fileName);
     void saveBeforeExit();
 
+    bool deleteFromNodes(int id);
+
     // UI
     QComboBox* pathEdit;
     QPushButton* scanButton;
     QPushButton* refreshButton;
     QPushButton* backBtn;
+    QPushButton* fwdBtn;
     QProgressBar* progressBar;
     //AutoStretchTable* table;
     LoadingDialog *loader;
@@ -130,6 +133,8 @@ private:
     uint64_t processedSize = 0;
     std::atomic<bool> cancel{ false };
     bool isSaving = false;
+
+    QVector<std::shared_ptr<Node>> backlog;
 
     QFileIconProvider iconProvider;
 

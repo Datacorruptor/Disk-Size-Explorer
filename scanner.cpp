@@ -113,7 +113,7 @@ QPair<uint64_t,uint64_t> DirectoryScanner::scan(std::shared_ptr<Node> node,
             }
             auto result = scan(child, l1parent, cancel, level+1);
             totalSize += result.first;
-            totalChildren += result.second;
+            totalChildren += result.second+1;
 
 
             if (level == 0)
