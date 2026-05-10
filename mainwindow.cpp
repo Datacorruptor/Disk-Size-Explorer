@@ -1113,7 +1113,14 @@ void MainWindow::onNodeStarted(uint64_t newSize,std::shared_ptr<Node> node)
 void MainWindow::showContextMenu(const QPoint& pos)
 {
     //int selected_row = table->rowAt(pos.y());
-    const QModelIndex &selected_index = table->indexAt(pos);
+
+    QList<QModelIndex> selectedIndexes = table->selectionModel()->selectedRows();
+
+    if (selectedIndexes.length() == 0){
+        return;
+    }
+
+    const QModelIndex &selected_index = selectedIndexes[0];
     QModelIndex selected_src = proxyModel->mapToSource(selected_index);
     int selected_row = selected_src.row();
 
@@ -1159,19 +1166,13 @@ void MainWindow::showContextMenu(const QPoint& pos)
             paths.append(path);
             sizes.append(size);
 
-
-
         }
 
         confirmMultiDelete(paths, names, sizes, rows, false);
     }
 
     if (chosen == open){
-
-
-
-        Node* node = current->children[selected_row].get();
-        QString path = QDir::toNativeSeparators(node->path());
+        QString path = fileModel->pathAt(selected_row);
         QProcess::startDetached("explorer", {"/select,", path});
 
         /*QFileInfo fileInfo(node->path());
